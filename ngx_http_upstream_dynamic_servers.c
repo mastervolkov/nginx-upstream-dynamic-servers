@@ -457,6 +457,14 @@ ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t *ctx) {
     if (ctx->state) {
         ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: '%V' could not be resolved (%i: %s)", &ctx->name, ctx->state, ngx_resolver_strerror(ctx->state));
 
+        // If the domain fails to resolve after a previously successful resolve
+        // then keep using the previous addresses and log a warning and try to
+        // resolve again on the next interval.
+        if (0 < dynamic_server->server->naddrs) {
+            ngx_log_error(NGX_LOG_WARN, ctx->resolver->log, 0, "upstream-dynamic-servers: Retaining last successful DNS results for '%V'", &ctx->name);
+            goto end;
+        }
+
         ngx_url_t                    u;
         ngx_memzero(&u, sizeof(ngx_url_t));
 
