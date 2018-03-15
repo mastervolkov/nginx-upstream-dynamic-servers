@@ -20,6 +20,7 @@ typedef struct {
     in_port_t                     port;
     ngx_event_t                   timer;
     ngx_queue_t                   pools;
+    unsigned                      last_resolve_failed:1;
 } ngx_http_upstream_dynamic_server_conf_t;
 
 typedef struct {
@@ -247,6 +248,8 @@ ngx_http_upstream_dynamic_server_directive(ngx_conf_t *cf, ngx_command_t *cmd, v
 
                 dynamic_server->host = u.host;
                 dynamic_server->port = (in_port_t) (u.no_port ? u.default_port : u.port);
+
+                dynamic_server->last_resolve_failed = 0;
             }
 
             continue;
@@ -455,13 +458,17 @@ ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t *ctx) {
     ngx_log_debug(NGX_LOG_DEBUG_CORE, ctx->resolver->log, 0, "upstream-dynamic-servers: Finished resolving '%V'", &ctx->name);
 
     if (ctx->state) {
-        ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: '%V' could not be resolved (%i: %s)", &ctx->name, ctx->state, ngx_resolver_strerror(ctx->state));
+        if (0 == dynamic_server->last_resolve_failed) {
+            // only log the first time we fail to resolve to avoid repeating
+            // log messages on every attempt.
+            dynamic_server->last_resolve_failed = 1;
+            ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: '%V' could not be resolved (%i: %s)", &ctx->name, ctx->state, ngx_resolver_strerror(ctx->state));
+        }
 
         // If the domain fails to resolve after a previously successful resolve
-        // then keep using the previous addresses and log a warning and try to
-        // resolve again on the next interval.
+        // then keep using the previous addresses and try to resolve again on
+        // the next interval.
         if (0 < dynamic_server->server->naddrs) {
-            ngx_log_error(NGX_LOG_WARN, ctx->resolver->log, 0, "upstream-dynamic-servers: Retaining last successful DNS results for '%V'", &ctx->name);
             goto end;
         }
 
@@ -488,6 +495,8 @@ ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t *ctx) {
         ctx->addr.name = u.addrs[0].name;
         ctx->addrs = &ctx->addr;
         ctx->naddrs = u.naddrs;
+    } else {
+        dynamic_server->last_resolve_failed = 0;
     }
 
     if (ctx->naddrs != dynamic_server->server->naddrs) {
