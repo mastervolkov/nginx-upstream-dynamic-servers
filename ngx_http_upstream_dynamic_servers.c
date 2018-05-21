@@ -241,7 +241,7 @@ ngx_http_upstream_dynamic_server_directive(ngx_conf_t *cf, ngx_command_t *cmd, v
                 }
 
                 ngx_memzero(dynamic_server, sizeof(ngx_http_upstream_dynamic_server_conf_t));
-                ngx_queue_init(&dynamic_server->pools);
+
                 dynamic_server->pool = NULL;
                 dynamic_server->server = us;
                 dynamic_server->upstream_conf = uscf;
@@ -385,6 +385,8 @@ ngx_http_upstream_dynamic_servers_init_process(ngx_cycle_t *cycle) {
     ngx_uint_t refresh_in;
 
     for (i = 0; i < udsmcf->dynamic_servers.nelts; i++) {
+        ngx_queue_init(&dynamic_server[i].pools);
+
         timer = &dynamic_server[i].timer;
         timer->handler = ngx_http_upstream_dynamic_server_resolve;
         timer->log = cycle->log;
