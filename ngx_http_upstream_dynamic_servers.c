@@ -528,14 +528,6 @@ ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t *ctx) {
 
 reinit_upstream:
 
-    new_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, ctx->resolver->log);
-    if (new_pool == NULL) {
-        ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Could not create new pool");
-        goto end;
-    }
-
-    ngx_log_debug(NGX_LOG_DEBUG_CORE, ctx->resolver->log, 0, "upstream-dynamic-servers: DNS changes for '%V' detected - reinitializing upstream configuration", &ctx->name);
-
     ngx_memzero(&cf, sizeof(ngx_conf_t));
     cf.name = "dynamic_server_init_upstream";
     cf.cycle = (ngx_cycle_t *) ngx_cycle;
@@ -544,6 +536,14 @@ reinit_upstream:
     cf.cmd_type = NGX_HTTP_MAIN_CONF;
     cf.log = ngx_cycle->log;
     cf.ctx = udsmcf->conf_ctx;
+
+    new_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, ctx->resolver->log);
+    if (new_pool == NULL) {
+        ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Could not create new pool");
+        goto end;
+    }
+
+    ngx_log_debug(NGX_LOG_DEBUG_CORE, ctx->resolver->log, 0, "upstream-dynamic-servers: DNS changes for '%V' detected - reinitializing upstream configuration", &ctx->name);
 
     addrs = ngx_pcalloc(new_pool, ctx->naddrs * sizeof(ngx_addr_t));
     ngx_memcpy(addrs, ctx->addrs, ctx->naddrs * sizeof(ngx_addr_t));
