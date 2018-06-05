@@ -28,6 +28,7 @@ typedef struct {
     ngx_pool_t                   *pool;
     ngx_addr_t                   *addrs;
     ngx_uint_t                    naddrs;
+    unsigned                      down:1;
 } ngx_http_upstream_dynamic_server_info_t;
 
 typedef struct {
@@ -241,7 +242,7 @@ ngx_http_upstream_dynamic_server_directive(ngx_conf_t *cf, ngx_command_t *cmd, v
                 }
 
                 ngx_memzero(dynamic_server, sizeof(ngx_http_upstream_dynamic_server_conf_t));
-                ngx_queue_init(&dynamic_server->pools);
+
                 dynamic_server->pool = NULL;
                 dynamic_server->server = us;
                 dynamic_server->upstream_conf = uscf;
@@ -385,6 +386,8 @@ ngx_http_upstream_dynamic_servers_init_process(ngx_cycle_t *cycle) {
     ngx_uint_t refresh_in;
 
     for (i = 0; i < udsmcf->dynamic_servers.nelts; i++) {
+        ngx_queue_init(&dynamic_server[i].pools);
+
         timer = &dynamic_server[i].timer;
         timer->handler = ngx_http_upstream_dynamic_server_resolve;
         timer->log = cycle->log;
@@ -452,6 +455,8 @@ ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t *ctx) {
     ngx_resolver_node_t  *rn;
     ngx_pool_t *new_pool;
     ngx_addr_t                      *addrs;
+    ngx_queue_t *q;
+    ngx_http_upstream_dynamic_server_info_t *info;
 
     dynamic_server = ctx->data;
 
@@ -526,14 +531,6 @@ ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t *ctx) {
 
 reinit_upstream:
 
-    new_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, ctx->resolver->log);
-    if (new_pool == NULL) {
-        ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Could not create new pool");
-        goto end;
-    }
-
-    ngx_log_debug(NGX_LOG_DEBUG_CORE, ctx->resolver->log, 0, "upstream-dynamic-servers: DNS changes for '%V' detected - reinitializing upstream configuration", &ctx->name);
-
     ngx_memzero(&cf, sizeof(ngx_conf_t));
     cf.name = "dynamic_server_init_upstream";
     cf.cycle = (ngx_cycle_t *) ngx_cycle;
@@ -542,6 +539,65 @@ reinit_upstream:
     cf.cmd_type = NGX_HTTP_MAIN_CONF;
     cf.log = ngx_cycle->log;
     cf.ctx = udsmcf->conf_ctx;
+
+    // Check if the resolved address set has been used before.
+    // Volatile DNS records tend to repeat limited permutations.
+    // This is partial mitigation of the memory leak due to pools never being destroyed.
+    for (q = ngx_queue_head(&dynamic_server->pools);
+         q != ngx_queue_sentinel(&dynamic_server->pools);
+         q = ngx_queue_next(q))
+    {
+
+        info = ngx_queue_data(q, ngx_http_upstream_dynamic_server_info_t, queue);
+
+        if (ctx->naddrs != info->naddrs) {
+            // Different quantities of addresses cannot match, check another set.
+            continue;
+        }
+
+        for (i = 0; i < ctx->naddrs; i++) {
+            founded = 0;
+
+            for (j = 0; j < ctx->naddrs; j++) {
+                existing_addr = &info->addrs[j];
+                if (ngx_cmp_sockaddr(existing_addr->sockaddr, existing_addr->socklen, ctx->addrs[i].sockaddr, ctx->addrs[i].socklen, 0) == NGX_OK) {
+                    founded = 1;
+                    break;
+                }
+            }
+
+            if (!founded) {
+                // At least one address is not in this set, abort this inner loop.
+                break;
+            }
+        }
+        if (!founded) {
+            // At least one address is not in this set, check another set.
+            continue;
+        }
+
+        // This existing set is a match for the newly resolved address set,
+        // re-use the existing arrays and underlying memory pool.
+        dynamic_server->server->down = info->down;
+        dynamic_server->server->addrs = info->addrs;
+        dynamic_server->server->naddrs = info->naddrs;
+        dynamic_server->pool = info->pool;
+
+        if (ngx_http_upstream_dynamic_server_upstream_init(&cf, dynamic_server->upstream_conf) != NGX_OK) {
+            ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Error re-initializing upstream after DNS changes to a previous result");
+        }
+
+        // Do not create another memory pool and array for this address set.
+        goto end;
+    }
+
+    new_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, ctx->resolver->log);
+    if (new_pool == NULL) {
+        ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Could not create new pool");
+        goto end;
+    }
+
+    ngx_log_debug(NGX_LOG_DEBUG_CORE, ctx->resolver->log, 0, "upstream-dynamic-servers: DNS changes for '%V' detected - reinitializing upstream configuration", &ctx->name);
 
     addrs = ngx_pcalloc(new_pool, ctx->naddrs * sizeof(ngx_addr_t));
     ngx_memcpy(addrs, ctx->addrs, ctx->naddrs * sizeof(ngx_addr_t));
@@ -583,7 +639,6 @@ reinit_upstream:
     }
 
     if (dynamic_server->pool) {
-        ngx_http_upstream_dynamic_server_info_t *info;
         if ((info = ngx_pcalloc(dynamic_server->pool, sizeof(*info))) == NULL) {
             ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Error allocating memory to keep track of old DNS entries, skipping update.");
             ngx_destroy_pool(new_pool);
@@ -593,6 +648,7 @@ reinit_upstream:
         info->pool = dynamic_server->pool;
         info->addrs = dynamic_server->server->addrs;
         info->naddrs = dynamic_server->server->naddrs;
+        info->down = dynamic_server->server->down;
         ngx_queue_insert_tail(&dynamic_server->pools, &info->queue);
     }
 
