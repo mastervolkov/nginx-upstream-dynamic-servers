@@ -3,6 +3,10 @@
 #include <ngx_http.h>
 #include <nginx.h>
 
+#if (NGX_HTTP_UPSTREAM_CHECK)
+#include "ngx_http_upstream_check_module.h"
+#endif
+
 #define ngx_resolver_node(n)                                                 \
     (ngx_resolver_node_t *)                                                  \
         ((u_char *) (n) - offsetof(ngx_resolver_node_t, node))
@@ -240,7 +244,9 @@ static char * ngx_http_upstream_dynamic_server_directive(ngx_conf_t *cf, ngx_com
         // and assign a static IP that should never route. This is to account for
         // various things inside nginx that seem to expect a server to always have
         // at least 1 IP.
+#if !(NGX_HTTP_UPSTREAM_CHECK)
         us->down = 1;
+#endif
 
         u.url = ngx_http_upstream_dynamic_server_null_route;
         u.default_port = u.port;
@@ -513,7 +519,11 @@ reinit_upstream:
     }
 
     // If the domain failed to resolve, mark this server as down.
+#if (NGX_HTTP_UPSTREAM_CHECK)
+    dynamic_server->server->down = 0;
+#else
     dynamic_server->server->down = ctx->state ? 1 : 0;
+#endif
     dynamic_server->server->addrs = addrs;
     dynamic_server->server->naddrs = ctx->naddrs;
 
