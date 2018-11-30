@@ -395,6 +395,7 @@ static void ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t 
     uint32_t hash;
     ngx_resolver_node_t  *rn;
     ngx_pool_t *new_pool;
+    ngx_pool_t *new_resolv_pool;
     ngx_addr_t                      *addrs;
 
     dynamic_server = ctx->data;
@@ -414,6 +415,22 @@ static void ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t 
         u.url = ngx_http_upstream_dynamic_server_null_route;
         u.default_port = 80;
         u.no_resolve = 1;
+
+        new_resolv_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, ctx->resolver->log);
+        if (new_resolv_pool == NULL) {
+            ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: Could not create new pool");
+            goto end;
+        }
+        if (ngx_parse_url(new_resolv_pool, &u) != NGX_OK) {
+            if (u.err) {
+                ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0,
+                              "%s in upstream \"%V\"", u.err, &u.url);
+            }
+
+            goto end;
+        }
+        ngx_destroy_pool(new_resolv_pool);
+
         if (ngx_parse_url(ngx_cycle->pool, &u) != NGX_OK) {
             if (u.err) {
                 ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0,
@@ -422,6 +439,7 @@ static void ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t 
 
             goto end;
         }
+
         ctx->addr.sockaddr = u.addrs[0].sockaddr;
         ctx->addr.socklen = u.addrs[0].socklen;
         ctx->addr.name = u.addrs[0].name;
