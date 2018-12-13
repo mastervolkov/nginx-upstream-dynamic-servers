@@ -398,12 +398,19 @@ static void ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t 
     ngx_pool_t *new_resolv_pool;
     ngx_addr_t                      *addrs;
 
+    new_resolv_pool = NULL;
+
     dynamic_server = ctx->data;
 
     ngx_log_debug(NGX_LOG_DEBUG_CORE, ctx->resolver->log, 0, "upstream-dynamic-servers: Finished resolving '%V'", &ctx->name);
 
     if (ctx->state) {
-        ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: '%V' could not be resolved (%i: %s)", &ctx->name, ctx->state, ngx_resolver_strerror(ctx->state));
+        if (ngx_strncmp(ngx_http_upstream_dynamic_server_null_route.data, dynamic_server->server->addrs->name.data, ngx_strlen(ngx_http_upstream_dynamic_server_null_route.data) ) == 0) {
+            ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: '%V' could not be resolved (%i: %s) again", &ctx->name, ctx->state, ngx_resolver_strerror(ctx->state));
+            goto end;
+        } else {
+            ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0, "upstream-dynamic-servers: '%V' could not be resolved (%i: %s)", &ctx->name, ctx->state, ngx_resolver_strerror(ctx->state));
+        }
 
         ngx_url_t                    u;
         ngx_memzero(&u, sizeof(ngx_url_t));
@@ -422,16 +429,6 @@ static void ngx_http_upstream_dynamic_server_resolve_handler(ngx_resolver_ctx_t 
             goto end;
         }
         if (ngx_parse_url(new_resolv_pool, &u) != NGX_OK) {
-            if (u.err) {
-                ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0,
-                              "%s in upstream \"%V\"", u.err, &u.url);
-            }
-
-            goto end;
-        }
-        ngx_destroy_pool(new_resolv_pool);
-
-        if (ngx_parse_url(ngx_cycle->pool, &u) != NGX_OK) {
             if (u.err) {
                 ngx_log_error(NGX_LOG_ERR, ctx->resolver->log, 0,
                               "%s in upstream \"%V\"", u.err, &u.url);
@@ -570,6 +567,10 @@ end:
     }
 
     ngx_resolve_name_done(ctx);
+
+    if (new_resolv_pool != NULL) {
+        ngx_destroy_pool(new_resolv_pool);
+    }
 
     if (ngx_exiting) {
         ngx_log_debug(NGX_LOG_DEBUG_CORE, ngx_cycle->log, 0, "upstream-dynamic-servers: worker is about to exit, do not set the timer again");
